@@ -6,210 +6,133 @@
 `default_nettype none
 
 module tt_um_ALU4b (
-    input  wire [7:0] ui_in,    // Dedicated inputs
-    output wire [7:0] uo_out,   // Dedicated outputs
-    input  wire [7:0] uio_in,   // IOs: Input path
-    output wire [7:0] uio_out,  // IOs: Output path
+    input  wire [7:0] ui_in,    // Dedicated inputs (a and b)
+    output wire [7:0] uo_out,   // Dedicated outputs (result)
+    input  wire [7:0] uio_in,   // IOs: Input path (opcode)
+    output wire [7:0] uio_out,  // IOs: Output path (carry_out, overflow)
     output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
     input  wire       ena,      // always 1 when the design is powered, so you can ignore it
     input  wire       clk,      // clock
     input  wire       rst_n     // reset_n - low to reset
 );
 
-    // =========================================
-    // INPUTS
-    // =========================================
+    // Operation encoding
+    parameter ADD = 4'b0000;
+    parameter SUB = 4'b0001;
+    parameter MUL = 4'b0010;
+    parameter DIV = 4'b0011;
+    parameter AND = 4'b0100; // Logical AND
+    parameter OR  = 4'b0101; // Logical OR
+    parameter XOR = 4'b0110; // Logical XOR
+    parameter NOT = 4'b0111; // Logical NOT (Unary operation)
+    parameter ENC = 4'b1000; // Encryption operation
 
-    // A = ui_in[3:0]
-    // B = ui_in[7:4]
-    // Opcode = uio_in[3:0]
+    // Internal signals
+    wire [3:0] a = ui_in[7:4];   // Input a 
+    wire [3:0] b = ui_in[3:0];   // Input b 
+    wire [3:0] opcode = uio_in[3:0]; // Opcode
 
-    wire [3:0] A;
-    wire [3:0] B;
-    wire [3:0] opcode;
+    // Encryption parameters
+    parameter [7:0] ENCRYPTION_KEY = 8'hAB;
 
-    assign A      = ui_in[7:4];   // Input A  Mas  significativo
-    assign B      = ui_in[3:0];   // Input B  Menos significativo
-    assign opcode = uio_in[3:0];
-
-
-    // =========================================
-    // INTERNAL SIGNALS
-    // =========================================
-
-    reg [3:0] result;
-    reg carry;
+    // Internal signals for operations
+    wire [4:0] add_result;          // 5 bits to capture carry/overflow
+    wire [4:0] sub_result;          // 5 bits to capture borrow
+    wire [7:0] mul_result;          // 8 bits for multiplication
+    wire [3:0] div_quotient;
+    wire [3:0] div_remainder;
+    wire [3:0] and_result = a & b;
+    wire [3:0] or_result  = a | b;
+    wire [3:0] xor_result = a ^ b;
+    wire [3:0] not_result = ~a;
+    reg [7:0] result;
+    reg carry_out;
     reg overflow;
 
-    reg [4:0] temp_add;
-    reg [4:0] temp_sub;
+    // Addition
+    assign add_result = a + b;
 
-    reg [7:0] temp_mul;
+    // Subtraction
+    assign sub_result = a - b;
 
+    // Multiplication
+    assign mul_result = a * b;
 
-    // =========================================
-    // ALU
-    // =========================================
+    // Division
+    assign div_quotient = (b != 0) ? a / b : 4'b0000;
+    assign div_remainder = (b != 0) ? a % b : 4'b0000;
 
-    always @(*) begin
-
-        // Default values
-        result   = 4'b0000;
-        carry    = 1'b0;
-        overflow = 1'b0;
-
-        temp_add = 5'b00000;
-        temp_sub = 5'b00000;
-        temp_mul = 8'b00000000;
-
-        case (opcode)
-
-            // ADD
-            4'b0000: begin
-
-                temp_add = A + B;
-
-                result = temp_add[3:0];
-                carry  = temp_add[4];
-
-                overflow =
-                    (A[3] == B[3]) &&
-                    (result[3] != A[3]);
-
-            end
-
-
-            // SUB
-            4'b0001: begin
-
-                temp_sub = A + (~B) + 1'b1;
-
-                result = temp_sub[3:0];
-                carry  = temp_sub[4];
-
-                overflow =
-                    (A[3] != B[3]) &&
-                    (result[3] != A[3]);
-
-            end
-
-
-            // MUL
-            4'b0010: begin
-
-                temp_mul = A * B;
-
-                result = temp_mul[3:0];
-
-                carry = |temp_mul[7:4];
-
-                overflow = |temp_mul[7:4];
-
-            end
-
-
-            // DIV
-            4'b0011: begin
-
-                if (B != 4'b0000) begin
-
-                    result = A / B;
-
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            result <= 8'b00000000;
+            carry_out <= 0;
+            overflow <= 0;
+        end else begin
+            case (opcode)
+                ADD: begin
+                    result <= {4'b0000, add_result[3:0]}; // 4-bit result with upper 4 bits set to 0
+                    carry_out <= add_result[4]; // Carry out
+                    // Overflow detection
+                    overflow <= (a[3] & b[3] & ~add_result[3]) | (~a[3] & ~b[3] & add_result[3]);
                 end
-                else begin
-
-                    result   = 4'b0000;
-                    overflow = 1'b1;
-
+                SUB: begin
+                    result <= {4'b0000, sub_result[3:0]}; // 4-bit result with upper 4 bits set to 0
+                    carry_out <= ~sub_result[4]; 
+                    // Overflow detection
+                    overflow <= (a[3] & ~b[3] & ~sub_result[3]) | (~a[3] & b[3] & sub_result[3]);
                 end
-
-            end
-
-
-            // AND
-            4'b0100: begin
-
-                result = A & B;
-
-            end
-
-
-            // OR
-            4'b0101: begin
-
-                result = A | B;
-
-            end
-
-
-            // XOR
-            4'b0110: begin
-
-                result = A ^ B;
-
-            end
-
-
-            // NOT
-            4'b0111: begin
-
-                result = ~A;
-
-            end
-
-
-            // ENC
-            4'b1000: begin
-
-                result = A ^ B;
-
-            end
-
-
-            // Invalid opcode
-            default: begin
-
-                result   = 4'b0000;
-                carry    = 1'b0;
-                overflow = 1'b0;
-
-            end
-
-        endcase
-
+                MUL: begin
+                    result <= mul_result; // 8-bit result
+                end
+                DIV: begin
+                    result <= {div_remainder, div_quotient}; // 8-bit result (remainder: lower 4 bits, quotient: upper 4 bits)
+                end
+                AND: begin
+                    result <= {4'b0000, and_result}; // 4-bit result with upper 4 bits set to 0
+                end
+                OR: begin
+                    result <= {4'b0000, or_result}; // 4-bit result with upper 4 bits set to 0
+                end
+                XOR: begin
+                    result <= {4'b0000, xor_result}; // 4-bit result with upper 4 bits set to 0
+                end
+                NOT: begin
+                    result <= {4'b0000, not_result}; // 4-bit result with upper 4 bits set to 0
+                end
+                ENC: begin
+                    // Apply encryption to the concatenated input (a and b)
+                    result <= (a << 4 | b) ^ ENCRYPTION_KEY;
+                end
+                default: begin
+                    result <= 8'b00000000;
+                    carry_out <= 0;
+                    overflow <= 0;
+                end
+            endcase
+        end
     end
 
+    // Assign outputs
+    assign uo_out  = result;
+    assign uio_out[7] = overflow; 
+    assign uio_out[6] = carry_out;  
+    assign uio_out[5] = 1'b0; 
+    assign uio_out[4] = 1'b0; 
+    assign uio_out[3] = 1'b0;   
+    assign uio_out[2] = 1'b0;     
+    assign uio_out[1] = 1'b0;     
+    assign uio_out[0] = 1'b0;    
 
-    // =========================================
-    // OUTPUTS
-    // =========================================
+    // IO Enable Path
+    assign uio_oe[7] = 1'b1; 
+    assign uio_oe[6] = 1'b1;
+    assign uio_oe[5] = 1'b0; 
+    assign uio_oe[4] = 1'b0; 
+    assign uio_oe[3] = 1'b0; 
+    assign uio_oe[2] = 1'b0; 
+    assign uio_oe[1] = 1'b0; 
+    assign uio_oe[0] = 1'b0;
 
-    // Result in uo_out[3:0]
-    // Upper bits unused
-
-    assign uo_out = {4'b0000, result};
-
-
-    // uio_out[6] = Carry
-    // uio_out[7] = Overflow
-
-    assign uio_out = {
-        overflow,
-        carry,
-        6'b000000
-    };
-
-
-    // uio[7:6] outputs
-    // uio[5:0] inputs
-
-    assign uio_oe = 8'b11000000;
-
-
-    // =========================================
-    // UNUSED INPUTS
-    // =========================================
-
-    wire _unused = &{ena, clk, rst_n, uio_in[7:4], 1'b0};
+    wire _unused = &{ena, clk, rst_n, 1'b0};
 
 endmodule
